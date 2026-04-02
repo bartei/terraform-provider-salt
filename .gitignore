@@ -1,0 +1,26 @@
+.idea/
+*.dll
+*.exe
+*.exe~
+*.dylib
+*.so
+*.test
+*.out
+vendor/
+dist/
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Acceptance test VM and e2e artifacts
+test/acceptance/.vm/
+test/acceptance/.e2e/
+terraform-provider-salt
