@@ -384,8 +384,8 @@ func TestYamlQuote_NeedsQuoting(t *testing.T) {
 
 func TestBuildSaltCallCmd_NoPillar(t *testing.T) {
 	cmd := buildSaltCallCmdWithRoot(nil, false, 0, "/var/lib/salt-tf/test")
-	if !strings.Contains(cmd, "sudo salt-call") {
-		t.Errorf("expected sudo salt-call, got: %s", cmd)
+	if !strings.Contains(cmd, "salt-call") {
+		t.Errorf("expected salt-call in command, got: %s", cmd)
 	}
 	if strings.Contains(cmd, "--pillar-root") {
 		t.Errorf("should not have --pillar-root without pillar data, got: %s", cmd)
@@ -411,7 +411,7 @@ func TestBuildSaltCallCmd_TestMode(t *testing.T) {
 
 func TestBuildSaltCallCmd_WithTimeout(t *testing.T) {
 	cmd := buildSaltCallCmdWithRoot(nil, false, 300, "/var/lib/salt-tf/test")
-	if !strings.HasPrefix(cmd, "timeout 300 sudo salt-call") {
+	if !strings.HasPrefix(cmd, "timeout 300 ") || !strings.Contains(cmd, "salt-call") {
 		t.Errorf("expected timeout prefix, got: %s", cmd)
 	}
 }

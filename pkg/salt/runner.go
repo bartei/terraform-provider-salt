@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/stefanob/terraform-provider-salt/pkg/ssh"
+	"github.com/bartei/terraform-provider-salt/pkg/ssh"
 )
 
 // BaseDir is the root directory for all salt-tf resources on remote hosts.
@@ -299,8 +299,8 @@ func buildSaltCallCmdWithRoot(pillar map[string]string, testMode bool, timeoutSe
 	}
 
 	cmd := fmt.Sprintf(
-		"%ssudo salt-call --local --file-root=%s --out=json --out-file=/dev/stdout --retcode-passthrough",
-		prefix, workDir,
+		"%s%s --local --file-root=%s --out=json --out-file=/dev/stdout --retcode-passthrough",
+		prefix, SaltCallCmd(), workDir,
 	)
 
 	if len(pillar) > 0 {

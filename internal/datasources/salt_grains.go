@@ -10,7 +10,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	"github.com/stefanob/terraform-provider-salt/pkg/ssh"
+	"github.com/bartei/terraform-provider-salt/pkg/ssh"
 )
 
 var _ datasource.DataSource = &SaltGrainsDataSource{}

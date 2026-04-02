@@ -31,7 +31,7 @@ The SSH user must have **passwordless sudo** access, as `salt-call` requires roo
 terraform {
   required_providers {
     salt = {
-      source  = "stefanob/salt"
+      source  = "bartei/salt"
       version = "~> 0.1"
     }
   }

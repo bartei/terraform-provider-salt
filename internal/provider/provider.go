@@ -9,8 +9,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	"github.com/stefanob/terraform-provider-salt/internal/datasources"
-	"github.com/stefanob/terraform-provider-salt/internal/resources"
+	"github.com/bartei/terraform-provider-salt/internal/datasources"
+	"github.com/bartei/terraform-provider-salt/internal/resources"
 )
 
 var _ provider.Provider = &SaltProvider{}

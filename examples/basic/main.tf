@@ -1,7 +1,7 @@
 terraform {
   required_providers {
     salt = {
-      source = "registry.terraform.io/stefanob/salt"
+      source = "registry.terraform.io/bartei/salt"
     }
   }
 }

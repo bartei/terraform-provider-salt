@@ -20,8 +20,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	"github.com/stefanob/terraform-provider-salt/pkg/salt"
-	"github.com/stefanob/terraform-provider-salt/pkg/ssh"
+	"github.com/bartei/terraform-provider-salt/pkg/salt"
+	"github.com/bartei/terraform-provider-salt/pkg/ssh"
 )
 
 var (

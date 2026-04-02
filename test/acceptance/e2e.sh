@@ -60,7 +60,7 @@ cp "${PROJECT_ROOT}/examples/basic/main.tf" "${WORK_DIR}/main.tf"
 cat > "${WORK_DIR}/dev.tfrc" <<EOF
 provider_installation {
   dev_overrides {
-    "registry.terraform.io/stefanob/salt" = "${PROJECT_ROOT}"
+    "registry.terraform.io/bartei/salt" = "${PROJECT_ROOT}"
   }
   direct {}
 }
@@ -173,7 +173,7 @@ cat > "${WORK_DIR}/main.tf" <<'TFEOF'
 terraform {
   required_providers {
     salt = {
-      source = "registry.terraform.io/stefanob/salt"
+      source = "registry.terraform.io/bartei/salt"
     }
   }
 }
@@ -262,7 +262,7 @@ step "terraform apply (salt_grains data source)"
 cat > "${WORK_DIR}/main.tf" <<'TFEOF'
 terraform {
   required_providers {
-    salt = { source = "registry.terraform.io/stefanob/salt" }
+    salt = { source = "registry.terraform.io/bartei/salt" }
   }
 }
 
@@ -337,7 +337,7 @@ pass "Pillar data configured on VM"
 cat > "${WORK_DIR}/main.tf" <<'TFEOF'
 terraform {
   required_providers {
-    salt = { source = "registry.terraform.io/stefanob/salt" }
+    salt = { source = "registry.terraform.io/bartei/salt" }
   }
 }
 
@@ -409,7 +409,7 @@ pass "Test formula git repo created on VM"
 cat > "${WORK_DIR}/main.tf" <<'TFEOF'
 terraform {
   required_providers {
-    salt = { source = "registry.terraform.io/stefanob/salt" }
+    salt = { source = "registry.terraform.io/bartei/salt" }
   }
 }
 
@@ -475,7 +475,7 @@ step "terraform import (adopt existing resource without apply)"
 cat > "${WORK_DIR}/main.tf" <<'TFEOF'
 terraform {
   required_providers {
-    salt = { source = "registry.terraform.io/stefanob/salt" }
+    salt = { source = "registry.terraform.io/bartei/salt" }
   }
 }
 

@@ -4,8 +4,28 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/stefanob/terraform-provider-salt/pkg/ssh"
+	"github.com/bartei/terraform-provider-salt/pkg/ssh"
 )
+
+// saltCallPath is the extended PATH used to find salt-call across common
+// install locations (onedir, pip, system package).
+const saltPath = "/opt/saltstack/salt/bin:/usr/local/bin:/usr/bin:/bin"
+
+// SaltCallCmd returns a sudo invocation of salt-call with the correct PATH
+// so it works regardless of where Salt was installed.
+func SaltCallCmd() string {
+	return fmt.Sprintf(`sudo env "PATH=%s:$PATH" salt-call`, saltPath)
+}
+
+// FindSaltCall returns the version string if salt-call is installed, or empty string if not.
+func FindSaltCall(client *ssh.Client) string {
+	cmd := fmt.Sprintf(`env "PATH=%s:$PATH" salt-call --version 2>/dev/null || echo 'not-installed'`, saltPath)
+	out, _ := client.Run(cmd)
+	if strings.Contains(out, "not-installed") {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
 
 // EnsureVersion checks if the desired Salt version is installed on the remote
 // host and bootstraps it if not.
@@ -14,17 +34,16 @@ import (
 //   - "latest": ensures Salt is installed (any version), bootstraps if missing.
 //   - A version number like "3007": ensures that specific version is present.
 func EnsureVersion(client *ssh.Client, version string) error {
-	out, _ := client.Run("salt-call --version 2>/dev/null || echo 'not-installed'")
+	installed := FindSaltCall(client)
 
 	if version == "latest" {
-		// Just need Salt to be present, any version
-		if !strings.Contains(out, "not-installed") && strings.Contains(out, "salt-call") {
+		if installed != "" {
 			return nil
 		}
 		return bootstrap(client, "")
 	}
 
-	if strings.Contains(out, version) {
+	if strings.Contains(installed, version) {
 		return nil
 	}
 

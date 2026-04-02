@@ -24,7 +24,7 @@ Instead of running a Salt master/minion infrastructure, this provider SSHes into
 terraform {
   required_providers {
     salt = {
-      source  = "stefanob/salt"
+      source  = "bartei/salt"
       version = "~> 0.1"
     }
   }

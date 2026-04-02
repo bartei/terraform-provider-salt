@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stefanob/terraform-provider-salt/pkg/salt"
-	"github.com/stefanob/terraform-provider-salt/pkg/ssh"
+	"github.com/bartei/terraform-provider-salt/pkg/salt"
+	"github.com/bartei/terraform-provider-salt/pkg/ssh"
 )
 
 // These tests require a running QEMU VM. Start one with:
