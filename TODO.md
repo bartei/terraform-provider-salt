@@ -51,6 +51,7 @@
 
 ## Ideas / Backlog
 
+- [ ] Skip sudo when SSH user is root — avoids requiring sudo on minimal systems
 - [ ] `salt_cmd` resource — run arbitrary `salt-call` commands (escape hatch)
 - [ ] Event hooks — trigger external notifications on state apply success/failure
 - [ ] Dry-run output in `terraform plan` — show what Salt *would* change
