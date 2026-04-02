@@ -173,8 +173,8 @@ func TestParseResult_ErrorArray(t *testing.T) {
 	if !strings.Contains(err.Error(), "Jinja variable") {
 		t.Errorf("expected Jinja error in message, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "Salt returned an error") {
-		t.Errorf("expected 'Salt returned an error' prefix, got: %v", err)
+	if !strings.Contains(err.Error(), "salt returned an error") {
+		t.Errorf("expected 'salt returned an error' prefix, got: %v", err)
 	}
 }
 

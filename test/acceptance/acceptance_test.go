@@ -85,7 +85,7 @@ func TestSSHConnectivity(t *testing.T) {
 	}
 
 	client := connectVM(t)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	out, err := client.Run("echo hello")
 	if err != nil {
@@ -102,7 +102,7 @@ func TestSaltBootstrapAndApply(t *testing.T) {
 	}
 
 	client := connectVM(t)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Step 1: Bootstrap Salt
 	t.Log("Bootstrapping Salt...")
@@ -174,7 +174,7 @@ func TestDriftDetection(t *testing.T) {
 	}
 
 	client := connectVM(t)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Ensure Salt is installed (may already be from previous test)
 	if err := salt.EnsureVersion(client, "3007"); err != nil {
@@ -244,7 +244,7 @@ func TestPillarData(t *testing.T) {
 	}
 
 	client := connectVM(t)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	if err := salt.EnsureVersion(client, "3007"); err != nil {
 		t.Fatalf("Salt bootstrap failed: %v", err)

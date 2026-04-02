@@ -196,7 +196,7 @@ func (r *SaltFormulaResource) Read(ctx context.Context, req resource.ReadRequest
 		resp.State.RemoveResource(ctx)
 		return
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Clone/update the formula for testing
 	if err := r.cloneFormula(client, &data); err != nil {
@@ -275,7 +275,7 @@ func (r *SaltFormulaResource) Delete(ctx context.Context, req resource.DeleteReq
 	if err != nil {
 		return
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	_, _ = client.Run(fmt.Sprintf("sudo rm -rf %s", formulaDir))
 }
@@ -354,7 +354,7 @@ func (r *SaltFormulaResource) applyFormula(ctx context.Context, data *SaltFormul
 		diags.AddError(fmt.Sprintf("SSH connection to %s failed", host), err.Error())
 		return nil, diags
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Determine Salt version
 	saltVersion := r.defaultSaltVersion
@@ -453,7 +453,7 @@ func (r *SaltFormulaResource) generateFormulaTop(client *ssh.Client) (string, er
 	var b strings.Builder
 	b.WriteString("base:\n  '*':\n")
 	for _, name := range names {
-		b.WriteString(fmt.Sprintf("    - %s\n", name))
+		fmt.Fprintf(&b, "    - %s\n", name)
 	}
 	return b.String(), nil
 }

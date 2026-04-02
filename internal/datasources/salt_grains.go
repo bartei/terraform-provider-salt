@@ -97,7 +97,7 @@ func (d *SaltGrainsDataSource) Read(ctx context.Context, req datasource.ReadRequ
 		)
 		return
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	r, err := client.RunCapture("sudo salt-call --local grains.items --out=json --out-file=/dev/stdout")
 	if err != nil {

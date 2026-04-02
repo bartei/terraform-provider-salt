@@ -146,7 +146,7 @@ func (c *Client) RunCapture(cmd string) (RunResult, error) {
 	if err != nil {
 		return RunResult{}, fmt.Errorf("creating session: %w", err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	var stdout, stderr bytes.Buffer
 	session.Stdout = &stdout
@@ -175,7 +175,7 @@ func (c *Client) Upload(remotePath string, content []byte) error {
 	if err != nil {
 		return fmt.Errorf("creating session: %w", err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	// Create parent directory
 	dir := remotePath[:len(remotePath)-len(remotePath[lastSlash(remotePath):])]
@@ -185,7 +185,7 @@ func (c *Client) Upload(remotePath string, content []byte) error {
 		}
 
 		// Need a new session after Run
-		session.Close()
+		_ = session.Close()
 		session, err = c.client.NewSession()
 		if err != nil {
 			return fmt.Errorf("creating session: %w", err)

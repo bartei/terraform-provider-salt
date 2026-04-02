@@ -55,7 +55,7 @@ func (r *Result) Summary() string {
 	var b strings.Builder
 
 	if len(failed) > 0 {
-		b.WriteString(fmt.Sprintf("Failed (%d):\n", len(failed)))
+		fmt.Fprintf(&b, "Failed (%d):\n", len(failed))
 		sortStateResults(failed)
 		for _, sr := range failed {
 			writeStateDetail(&b, sr)
@@ -63,7 +63,7 @@ func (r *Result) Summary() string {
 	}
 
 	if len(changed) > 0 {
-		b.WriteString(fmt.Sprintf("Changed (%d):\n", len(changed)))
+		fmt.Fprintf(&b, "Changed (%d):\n", len(changed))
 		sortStateResults(changed)
 		for _, sr := range changed {
 			writeStateDetail(&b, sr)
@@ -71,10 +71,10 @@ func (r *Result) Summary() string {
 	}
 
 	if len(ok) > 0 {
-		b.WriteString(fmt.Sprintf("Unchanged (%d):\n", len(ok)))
+		fmt.Fprintf(&b, "Unchanged (%d):\n", len(ok))
 		sortStateResults(ok)
 		for _, sr := range ok {
-			b.WriteString(fmt.Sprintf("  ✓ %s\n", sr.Name))
+			fmt.Fprintf(&b, "  ✓ %s\n", sr.Name)
 		}
 	}
 
@@ -130,10 +130,10 @@ func writeStateDetail(b *strings.Builder, sr StateResult) {
 		sls = fmt.Sprintf(" (sls: %s)", sr.SLS)
 	}
 
-	b.WriteString(fmt.Sprintf("  %s %s%s\n", status, sr.Name, sls))
+	fmt.Fprintf(b, "  %s %s%s\n", status, sr.Name, sls)
 
 	if sr.Comment != "" {
-		b.WriteString(fmt.Sprintf("    Comment: %s\n", sr.Comment))
+		fmt.Fprintf(b, "    Comment: %s\n", sr.Comment)
 	}
 
 	for k, v := range sr.Changes {
@@ -142,7 +142,7 @@ func writeStateDetail(b *strings.Builder, sr StateResult) {
 		if len(vs) > 200 {
 			vs = vs[:200] + "..."
 		}
-		b.WriteString(fmt.Sprintf("    %s: %s\n", k, vs))
+		fmt.Fprintf(b, "    %s: %s\n", k, vs)
 	}
 }
 
@@ -205,7 +205,7 @@ func generateTop(states map[string]string) string {
 	var b strings.Builder
 	b.WriteString("base:\n  '*':\n")
 	for _, name := range names {
-		b.WriteString(fmt.Sprintf("    - %s\n", name))
+		fmt.Fprintf(&b, "    - %s\n", name)
 	}
 	return b.String()
 }
@@ -335,7 +335,7 @@ func parseResult(rawJSON string) (*Result, error) {
 	// Check if "local" is an error array (Salt returns errors this way)
 	var errorMessages []string
 	if err := json.Unmarshal(localRaw, &errorMessages); err == nil {
-		return nil, fmt.Errorf("Salt returned an error:\n%s", strings.Join(errorMessages, "\n"))
+		return nil, fmt.Errorf("salt returned an error:\n%s", strings.Join(errorMessages, "\n"))
 	}
 
 	// Parse the normal state result map

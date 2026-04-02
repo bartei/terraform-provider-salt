@@ -204,7 +204,7 @@ func (r *SaltStateResource) Read(ctx context.Context, req resource.ReadRequest, 
 		resp.State.RemoveResource(ctx)
 		return
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	workDir := salt.WorkDir(data.ID.ValueString())
 	states := extractStringMap(ctx, data.States)
@@ -287,7 +287,7 @@ func (r *SaltStateResource) Delete(ctx context.Context, req resource.DeleteReque
 		// Host gone — nothing to clean up
 		return
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Clean up this resource's working directory
 	_, _ = client.Run(fmt.Sprintf("sudo rm -rf %s", salt.WorkDir(data.ID.ValueString())))
@@ -335,7 +335,7 @@ func (r *SaltStateResource) applySalt(ctx context.Context, data *SaltStateModel,
 		)
 		return nil, diags
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Determine Salt version
 	saltVersion := r.defaultSaltVersion
