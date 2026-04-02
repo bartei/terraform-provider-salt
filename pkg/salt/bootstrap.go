@@ -57,7 +57,7 @@ func bootstrap(client *ssh.Client, version string) error {
 	}
 
 	bootstrapCmd := fmt.Sprintf(
-		`curl -fsSL https://github.com/saltstack/salt-bootstrap/releases/latest/download/bootstrap-salt.sh | sudo sh -s -- -P -x python3%s`,
+		`curl -fsSL https://github.com/saltstack/salt-bootstrap/releases/latest/download/bootstrap-salt.sh | sudo sh -s -- -N -P -x python3%s`,
 		versionArg,
 	)
 
@@ -65,8 +65,8 @@ func bootstrap(client *ssh.Client, version string) error {
 		return fmt.Errorf("bootstrap failed: %w", err)
 	}
 
-	// Disable salt-minion daemon — we only want masterless mode
-	_, _ = client.Run("systemctl disable --now salt-minion 2>/dev/null || true")
+	// Ensure salt-minion is disabled in case it was previously installed
+	_, _ = client.Run("sudo systemctl disable --now salt-minion 2>/dev/null || true")
 
 	return nil
 }

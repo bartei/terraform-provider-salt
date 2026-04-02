@@ -343,15 +343,16 @@ func (r *SaltStateResource) applySalt(ctx context.Context, data *SaltStateModel,
 		saltVersion = data.SaltVersion.ValueString()
 	}
 
-	// Bootstrap Salt if needed
-	if saltVersion != "" {
-		if err := salt.EnsureVersion(client, saltVersion); err != nil {
-			diags.AddError(
-				fmt.Sprintf("Salt bootstrap failed on %s", host),
-				fmt.Sprintf("Failed to install Salt version %q.\n\n%s", saltVersion, err.Error()),
-			)
-			return nil, diags
-		}
+	// Bootstrap Salt if needed (default to "latest" if no version specified)
+	if saltVersion == "" {
+		saltVersion = "latest"
+	}
+	if err := salt.EnsureVersion(client, saltVersion); err != nil {
+		diags.AddError(
+			fmt.Sprintf("Salt bootstrap failed on %s", host),
+			fmt.Sprintf("Failed to install Salt version %q.\n\n%s", saltVersion, err.Error()),
+		)
+		return nil, diags
 	}
 
 	workDir := salt.WorkDir(resourceID)
