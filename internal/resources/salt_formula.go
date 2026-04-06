@@ -149,6 +149,7 @@ func (r *SaltFormulaResource) Schema(_ context.Context, _ resource.SchemaRequest
 				Computed:    true,
 				PlanModifiers: []planmodifier.String{
 					unknownOnAnyChange{inputsChanged: saltFormulaInputsChanged},
+					unknownWhenHashCleared{},
 				},
 			},
 		},
@@ -156,7 +157,9 @@ func (r *SaltFormulaResource) Schema(_ context.Context, _ resource.SchemaRequest
 }
 
 // saltFormulaInputsChanged returns true if any input attributes of SaltFormulaModel
-// differ between state and plan.
+// differ between state and plan. Every non-computed attribute must be checked
+// here — if we miss one, the plan modifier will preserve stale computed values
+// and Terraform will report "Provider produced inconsistent result after apply".
 func saltFormulaInputsChanged(ctx context.Context, stateRaw, planRaw tfsdk.State) bool {
 	var state, plan SaltFormulaModel
 	if diags := stateRaw.Get(ctx, &state); diags.HasError() {
@@ -165,14 +168,18 @@ func saltFormulaInputsChanged(ctx context.Context, stateRaw, planRaw tfsdk.State
 	if diags := planRaw.Get(ctx, &plan); diags.HasError() {
 		return true
 	}
-	return !state.RepoURL.Equal(plan.RepoURL) ||
+	return !state.Host.Equal(plan.Host) ||
+		!state.Port.Equal(plan.Port) ||
+		!state.User.Equal(plan.User) ||
+		!state.PrivateKey.Equal(plan.PrivateKey) ||
+		!state.SaltVersion.Equal(plan.SaltVersion) ||
+		!state.RepoURL.Equal(plan.RepoURL) ||
 		!state.Ref.Equal(plan.Ref) ||
 		!state.Pillar.Equal(plan.Pillar) ||
 		!state.Triggers.Equal(plan.Triggers) ||
-		!state.Host.Equal(plan.Host) ||
-		!state.User.Equal(plan.User) ||
-		!state.PrivateKey.Equal(plan.PrivateKey) ||
-		!state.SaltVersion.Equal(plan.SaltVersion)
+		!state.SSHTimeout.Equal(plan.SSHTimeout) ||
+		!state.SaltTimeout.Equal(plan.SaltTimeout) ||
+		!state.KeepRemoteFiles.Equal(plan.KeepRemoteFiles)
 }
 
 func (r *SaltFormulaResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {

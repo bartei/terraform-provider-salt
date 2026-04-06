@@ -535,7 +535,9 @@ func extractStringMap(ctx context.Context, m types.Map) map[string]string {
 }
 
 // saltStateInputsChanged returns true if any input attributes of SaltStateModel
-// differ between state and plan.
+// differ between state and plan. Every non-computed attribute must be checked
+// here — if we miss one, the plan modifier will preserve stale computed values
+// and Terraform will report "Provider produced inconsistent result after apply".
 func saltStateInputsChanged(ctx context.Context, stateRaw, planRaw tfsdk.State) bool {
 	var state, plan SaltStateModel
 	if diags := stateRaw.Get(ctx, &state); diags.HasError() {
@@ -544,13 +546,19 @@ func saltStateInputsChanged(ctx context.Context, stateRaw, planRaw tfsdk.State) 
 	if diags := planRaw.Get(ctx, &plan); diags.HasError() {
 		return true
 	}
-	return !state.States.Equal(plan.States) ||
-		!state.Pillar.Equal(plan.Pillar) ||
-		!state.Triggers.Equal(plan.Triggers) ||
-		!state.Host.Equal(plan.Host) ||
+	return !state.Host.Equal(plan.Host) ||
+		!state.Port.Equal(plan.Port) ||
 		!state.User.Equal(plan.User) ||
 		!state.PrivateKey.Equal(plan.PrivateKey) ||
-		!state.SaltVersion.Equal(plan.SaltVersion)
+		!state.SaltVersion.Equal(plan.SaltVersion) ||
+		!state.States.Equal(plan.States) ||
+		!state.Pillar.Equal(plan.Pillar) ||
+		!state.DestroyStates.Equal(plan.DestroyStates) ||
+		!state.DestroyPillar.Equal(plan.DestroyPillar) ||
+		!state.Triggers.Equal(plan.Triggers) ||
+		!state.SSHTimeout.Equal(plan.SSHTimeout) ||
+		!state.SaltTimeout.Equal(plan.SaltTimeout) ||
+		!state.KeepRemoteFiles.Equal(plan.KeepRemoteFiles)
 }
 
 // unknownOnAnyChange marks a computed attribute as unknown whenever the resource
@@ -603,6 +611,7 @@ func (m unknownOnAnyChange) PlanModifyString(ctx context.Context, req planmodifi
 // unknownWhenHashCleared marks state_output as unknown when applied_hash was
 // cleared to "" by Read() (drift detected). Without this, the plan preserves
 // the old state_output value but apply produces a new one → inconsistent result.
+// Works for any resource that has an "applied_hash" attribute.
 type unknownWhenHashCleared struct{}
 
 func (m unknownWhenHashCleared) Description(_ context.Context) string {
@@ -618,11 +627,11 @@ func (m unknownWhenHashCleared) PlanModifyString(ctx context.Context, req planmo
 		return
 	}
 
-	var state SaltStateModel
-	if diags := req.State.Get(ctx, &state); diags.HasError() {
+	var hash types.String
+	if diags := req.State.GetAttribute(ctx, path.Root("applied_hash"), &hash); diags.HasError() {
 		return
 	}
-	if state.AppliedHash.ValueString() == "" {
+	if hash.ValueString() == "" {
 		resp.PlanValue = types.StringUnknown()
 	}
 }
