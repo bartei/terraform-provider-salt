@@ -57,7 +57,7 @@ func bootstrap(client *ssh.Client, version string) error {
 	}
 
 	bootstrapCmd := fmt.Sprintf(
-		`curl -fsSL https://github.com/saltstack/salt-bootstrap/releases/latest/download/bootstrap-salt.sh | sudo sh -s -- -N -P -x python3%s`,
+		`curl -fsSL https://github.com/saltstack/salt-bootstrap/releases/latest/download/bootstrap-salt.sh | sudo sh -s -- -P -x python3%s`,
 		versionArg,
 	)
 

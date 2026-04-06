@@ -13,6 +13,7 @@ The resource supports:
 - **Pillar data** passed from Terraform variables into Salt's Jinja templates
 - **Drift detection** via `salt-call test=True` on every `terraform plan`
 - **Idempotent applies** — running `terraform apply` twice produces no changes if the host is in sync
+- **Destroy states** — optional Salt states applied during `terraform destroy` to reverse changes (e.g. stop services, unmount filesystems)
 - **Automatic cleanup** of remote files on `terraform destroy`
 
 ## Example Usage
@@ -102,6 +103,83 @@ resource "salt_state" "config" {
 }
 ```
 
+### With destroy states
+
+Use `destroy_states` to run Salt states during `terraform destroy` before the remote files are cleaned up. This is useful for reversing changes that can't be left behind — stopping services, removing packages, unmounting filesystems, etc.
+
+```terraform
+resource "salt_state" "app" {
+  host        = "10.0.0.5"
+  user        = "deploy"
+  private_key = file("~/.ssh/id_ed25519")
+
+  states = {
+    "app.sls" = <<-SLS
+      myapp:
+        pkg.installed: []
+        service.running:
+          - enable: True
+      /opt/myapp/config.yml:
+        file.managed:
+          - contents: |
+              port: {{ pillar['app_port'] }}
+    SLS
+  }
+
+  pillar = {
+    app_port = "8080"
+  }
+
+  destroy_states = {
+    "cleanup.sls" = <<-SLS
+      myapp:
+        service.dead:
+          - enable: False
+        pkg.removed: []
+      /opt/myapp:
+        file.absent: []
+    SLS
+  }
+}
+```
+
+Destroy states run in an isolated working directory (`/var/lib/salt-tf/<id>-destroy/`) so they don't interfere with the main states. The destroy working directory is cleaned up automatically after the destroy states run.
+
+You can also pass pillar data to destroy states via `destroy_pillar`:
+
+```terraform
+resource "salt_state" "mount" {
+  host        = "10.0.0.5"
+  user        = "deploy"
+  private_key = file("~/.ssh/id_ed25519")
+
+  states = {
+    "mount.sls" = <<-SLS
+      {{ pillar['mount_point'] }}:
+        mount.mounted:
+          - device: {{ pillar['device'] }}
+          - fstype: ext4
+    SLS
+  }
+
+  pillar = {
+    mount_point = "/data"
+    device      = "/dev/sdb1"
+  }
+
+  destroy_states = {
+    "unmount.sls" = <<-SLS
+      {{ pillar['mount_point'] }}:
+        mount.unmounted: []
+    SLS
+  }
+
+  destroy_pillar = {
+    mount_point = "/data"
+  }
+}
+```
+
 ### Multiple resources on the same host
 
 Each `salt_state` resource uses an isolated working directory (`/var/lib/salt-tf/<id>/`), so multiple resources can safely target the same host without interfering with each other:
@@ -144,6 +222,8 @@ resource "salt_state" "app" {
 - `port` (Number) — SSH port. Defaults to `22`.
 - `salt_version` (String) — Salt version to install on the target. Accepts a version number like `"3007"` or `"3007.1"`, or `"latest"` to install without version pinning. Overrides the provider-level `salt_version`.
 - `pillar` (Map of String) — Pillar data passed to Salt states. Values are available in Jinja templates as `{{ pillar['key'] }}`.
+- `destroy_states` (Map of String) — Salt states applied during `terraform destroy` before cleaning up remote files. Use this to reverse the effects of the main states (e.g. stop services, remove packages, unmount filesystems). Runs in an isolated working directory.
+- `destroy_pillar` (Map of String) — Pillar data passed to the destroy states.
 - `triggers` (Map of String) — Arbitrary key-value pairs. Any change to this map triggers re-application of states on the next `terraform apply`.
 - `ssh_timeout` (Number) — SSH connection timeout in seconds. Defaults to `30`.
 - `salt_timeout` (Number) — Timeout in seconds for `salt-call` execution. Defaults to `300` (5 minutes). Set to `0` for no timeout.
@@ -225,6 +305,28 @@ stderr:
 ```
 
 Exit code 124 indicates the `timeout` command killed the process.
+
+### Destroy state failure
+
+Occurs when `destroy_states` fail during `terraform destroy`. Terraform will halt the destroy and preserve the resource in state so you can fix the issue and retry.
+
+```
+Error: Salt destroy states failed on 10.0.0.5
+
+  ~ myapp (sls: cleanup)
+    Comment: Package myapp is not installed
+```
+
+## Destroy Behavior
+
+When `terraform destroy` is run, the resource performs these steps in order:
+
+1. **Apply destroy states** (if `destroy_states` is set) — uploads and runs the destroy Salt states in an isolated working directory (`/var/lib/salt-tf/<id>-destroy/`). If destroy states fail, the resource is **not** removed from Terraform state, allowing you to fix and retry.
+2. **Clean up remote files** (unless `keep_remote_files = true`) — removes `/var/lib/salt-tf/<id>/`.
+
+If the host is unreachable during destroy, the resource is silently removed from state (nothing to clean up).
+
+If `keep_remote_files = true` and no `destroy_states` are set, `terraform destroy` only removes the resource from Terraform state — nothing happens on the remote host.
 
 ## Drift Detection
 

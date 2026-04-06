@@ -238,6 +238,208 @@ drift_test_file:
 	_, _ = client.Run("rm -f /tmp/salt-drift-test")
 }
 
+func TestDestroyStates(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("Set TF_ACC=1 to run acceptance tests")
+	}
+
+	client := connectVM(t)
+	defer func() { _ = client.Close() }()
+
+	if err := salt.EnsureVersion(client, "3007"); err != nil {
+		t.Fatalf("Salt bootstrap failed: %v", err)
+	}
+
+	// Step 1: Apply states that create a file and a directory
+	states := map[string]string{
+		"setup.sls": `
+create_destroy_test_dir:
+  file.directory:
+    - name: /tmp/salt-destroy-test-dir
+    - makedirs: True
+
+create_destroy_test_file:
+  file.managed:
+    - name: /tmp/salt-destroy-test-dir/data.txt
+    - contents: "will be cleaned up"
+    - require:
+      - file: create_destroy_test_dir
+`,
+	}
+
+	workDir := salt.WorkDir("destroy-test")
+
+	t.Log("Uploading and applying setup states...")
+	if err := salt.UploadStates(client, states, workDir); err != nil {
+		t.Fatalf("Upload states failed: %v", err)
+	}
+	result, err := salt.Apply(client, nil, workDir, 0)
+	if err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("Apply failed:\n%s", result.FailedStates())
+	}
+
+	// Verify file exists
+	out, err := client.Run("cat /tmp/salt-destroy-test-dir/data.txt")
+	if err != nil {
+		t.Fatalf("File not created: %v", err)
+	}
+	if got := strings.TrimSpace(out); got != "will be cleaned up" {
+		t.Fatalf("Unexpected file content: %q", got)
+	}
+
+	// Step 2: Apply destroy states that remove the file and directory
+	destroyStates := map[string]string{
+		"cleanup.sls": `
+remove_destroy_test_file:
+  file.absent:
+    - name: /tmp/salt-destroy-test-dir/data.txt
+
+remove_destroy_test_dir:
+  file.absent:
+    - name: /tmp/salt-destroy-test-dir
+    - require:
+      - file: remove_destroy_test_file
+`,
+	}
+
+	destroyWorkDir := workDir + "-destroy"
+
+	t.Log("Uploading and applying destroy states...")
+	if err := salt.UploadStates(client, destroyStates, destroyWorkDir); err != nil {
+		t.Fatalf("Upload destroy states failed: %v", err)
+	}
+	destroyResult, err := salt.Apply(client, nil, destroyWorkDir, 0)
+	if err != nil {
+		t.Fatalf("Destroy apply failed: %v", err)
+	}
+	if !destroyResult.Success {
+		t.Fatalf("Destroy states failed:\n%s", destroyResult.FailedStates())
+	}
+
+	// Verify file was removed
+	_, err = client.Run("test -f /tmp/salt-destroy-test-dir/data.txt")
+	if err == nil {
+		t.Fatal("Expected file to be removed, but it still exists")
+	}
+
+	// Verify directory was removed
+	_, err = client.Run("test -d /tmp/salt-destroy-test-dir")
+	if err == nil {
+		t.Fatal("Expected directory to be removed, but it still exists")
+	}
+
+	// Step 3: Verify idempotency — running destroy states again should succeed
+	t.Log("Applying destroy states again (idempotent check)...")
+	if err := salt.UploadStates(client, destroyStates, destroyWorkDir); err != nil {
+		t.Fatalf("Re-upload destroy states failed: %v", err)
+	}
+	idempotentResult, err := salt.Apply(client, nil, destroyWorkDir, 0)
+	if err != nil {
+		t.Fatalf("Idempotent destroy apply failed: %v", err)
+	}
+	if !idempotentResult.Success {
+		t.Fatalf("Idempotent destroy failed:\n%s", idempotentResult.FailedStates())
+	}
+	if !idempotentResult.InSync {
+		t.Log("Note: destroy states reported changes on second run (expected for some state types)")
+	}
+
+	// Cleanup
+	_, _ = client.Run(fmt.Sprintf("sudo rm -rf %s %s", workDir, destroyWorkDir))
+}
+
+func TestDestroyStatesWithPillar(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("Set TF_ACC=1 to run acceptance tests")
+	}
+
+	client := connectVM(t)
+	defer func() { _ = client.Close() }()
+
+	if err := salt.EnsureVersion(client, "3007"); err != nil {
+		t.Fatalf("Salt bootstrap failed: %v", err)
+	}
+
+	// Apply states that create a file using pillar data
+	states := map[string]string{
+		"setup.sls": `
+pillar_destroy_test:
+  file.managed:
+    - name: {{ pillar['file_path'] }}
+    - contents: "pillar destroy test"
+`,
+	}
+
+	pillar := map[string]string{
+		"file_path": "/tmp/salt-pillar-destroy-test",
+	}
+
+	workDir := salt.WorkDir("destroy-pillar-test")
+
+	t.Log("Applying setup state with pillar...")
+	if err := salt.UploadStates(client, states, workDir); err != nil {
+		t.Fatalf("Upload failed: %v", err)
+	}
+	if err := salt.UploadPillar(client, pillar, workDir); err != nil {
+		t.Fatalf("Upload pillar failed: %v", err)
+	}
+	result, err := salt.Apply(client, pillar, workDir, 0)
+	if err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+	if !result.Success {
+		t.Fatalf("Apply failed:\n%s", result.FailedStates())
+	}
+
+	// Verify file exists
+	_, err = client.Run("test -f /tmp/salt-pillar-destroy-test")
+	if err != nil {
+		t.Fatal("File was not created")
+	}
+
+	// Apply destroy states with pillar
+	destroyStates := map[string]string{
+		"cleanup.sls": `
+remove_pillar_test:
+  file.absent:
+    - name: {{ pillar['file_path'] }}
+`,
+	}
+
+	destroyPillar := map[string]string{
+		"file_path": "/tmp/salt-pillar-destroy-test",
+	}
+
+	destroyWorkDir := workDir + "-destroy"
+
+	t.Log("Applying destroy states with pillar...")
+	if err := salt.UploadStates(client, destroyStates, destroyWorkDir); err != nil {
+		t.Fatalf("Upload destroy states failed: %v", err)
+	}
+	if err := salt.UploadPillar(client, destroyPillar, destroyWorkDir); err != nil {
+		t.Fatalf("Upload destroy pillar failed: %v", err)
+	}
+	destroyResult, err := salt.Apply(client, destroyPillar, destroyWorkDir, 0)
+	if err != nil {
+		t.Fatalf("Destroy apply failed: %v", err)
+	}
+	if !destroyResult.Success {
+		t.Fatalf("Destroy failed:\n%s", destroyResult.FailedStates())
+	}
+
+	// Verify file was removed
+	_, err = client.Run("test -f /tmp/salt-pillar-destroy-test")
+	if err == nil {
+		t.Fatal("Expected file to be removed, but it still exists")
+	}
+
+	// Cleanup
+	_, _ = client.Run(fmt.Sprintf("sudo rm -rf %s %s", workDir, destroyWorkDir))
+}
+
 func TestPillarData(t *testing.T) {
 	if os.Getenv("TF_ACC") == "" {
 		t.Skip("Set TF_ACC=1 to run acceptance tests")

@@ -13,7 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/bartei/terraform-provider-salt/pkg/salt"
@@ -141,20 +141,38 @@ func (r *SaltFormulaResource) Schema(_ context.Context, _ resource.SchemaRequest
 				Description: "Hash of the last successful salt-call output.",
 				Computed:    true,
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-					reapplyOnDrift{},
+					unknownOnAnyChange{inputsChanged: saltFormulaInputsChanged},
 				},
 			},
 			"state_output": schema.StringAttribute{
 				Description: "Raw JSON output from the last salt-call run.",
 				Computed:    true,
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-					unknownOnDrift{},
+					unknownOnAnyChange{inputsChanged: saltFormulaInputsChanged},
 				},
 			},
 		},
 	}
+}
+
+// saltFormulaInputsChanged returns true if any input attributes of SaltFormulaModel
+// differ between state and plan.
+func saltFormulaInputsChanged(ctx context.Context, stateRaw, planRaw tfsdk.State) bool {
+	var state, plan SaltFormulaModel
+	if diags := stateRaw.Get(ctx, &state); diags.HasError() {
+		return true
+	}
+	if diags := planRaw.Get(ctx, &plan); diags.HasError() {
+		return true
+	}
+	return !state.RepoURL.Equal(plan.RepoURL) ||
+		!state.Ref.Equal(plan.Ref) ||
+		!state.Pillar.Equal(plan.Pillar) ||
+		!state.Triggers.Equal(plan.Triggers) ||
+		!state.Host.Equal(plan.Host) ||
+		!state.User.Equal(plan.User) ||
+		!state.PrivateKey.Equal(plan.PrivateKey) ||
+		!state.SaltVersion.Equal(plan.SaltVersion)
 }
 
 func (r *SaltFormulaResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {

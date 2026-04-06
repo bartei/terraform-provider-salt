@@ -578,4 +578,98 @@ pass "Post-import destroy succeeded"
 
 rm -f "${WORK_DIR}/terraform.tfstate" "${WORK_DIR}/terraform.tfstate.backup"
 
+# ── Step 14: Test destroy_states ──
+step "terraform destroy with destroy_states"
+
+cat > "${WORK_DIR}/main.tf" <<'TFEOF'
+terraform {
+  required_providers {
+    salt = { source = "registry.terraform.io/bartei/salt" }
+  }
+}
+
+provider "salt" {}
+
+variable "ssh_private_key_file" { type = string }
+
+resource "salt_state" "destroy_test" {
+  host        = "localhost"
+  port        = 2222
+  user        = "test"
+  private_key = file(var.ssh_private_key_file)
+
+  states = {
+    "create.sls" = <<-SLS
+      create_marker:
+        file.managed:
+          - name: /tmp/destroy-test-marker
+          - contents: "resource is active"
+
+      create_artifact:
+        file.managed:
+          - name: /tmp/destroy-test-artifact
+          - contents: "should be removed by destroy states"
+    SLS
+  }
+
+  destroy_states = {
+    "cleanup.sls" = <<-SLS
+      remove_artifact:
+        file.absent:
+          - name: /tmp/destroy-test-artifact
+
+      mark_destroyed:
+        file.managed:
+          - name: /tmp/destroy-test-marker
+          - contents: "resource was destroyed cleanly"
+    SLS
+  }
+}
+TFEOF
+
+# Apply — creates both files
+terraform apply -auto-approve -var="ssh_private_key_file=${SSH_KEY}"
+pass "Apply with destroy_states succeeded"
+
+# Verify both files exist
+ssh -p 2222 -i "${SSH_KEY}" \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    test@localhost "test -f /tmp/destroy-test-marker && test -f /tmp/destroy-test-artifact" 2>/dev/null
+pass "Both managed files exist on host"
+
+# Destroy — should run destroy_states first, then clean up
+terraform destroy -auto-approve -var="ssh_private_key_file=${SSH_KEY}"
+pass "Destroy with destroy_states succeeded"
+
+# Verify destroy states ran: artifact should be gone
+if ssh -p 2222 -i "${SSH_KEY}" \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    test@localhost "test -f /tmp/destroy-test-artifact" 2>/dev/null; then
+    fail "Destroy states did not run — /tmp/destroy-test-artifact still exists"
+else
+    pass "Destroy states removed /tmp/destroy-test-artifact"
+fi
+
+# Verify destroy states ran: marker should show "resource was destroyed cleanly"
+MARKER=$(ssh -p 2222 -i "${SSH_KEY}" \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    test@localhost "cat /tmp/destroy-test-marker 2>/dev/null" 2>/dev/null || echo "missing")
+
+if [[ "$(echo "${MARKER}" | tr -d '\n')" == "resource was destroyed cleanly" ]]; then
+    pass "Destroy states updated marker: ${MARKER}"
+else
+    fail "Expected marker to say 'resource was destroyed cleanly', got: ${MARKER}"
+fi
+
+# Clean up
+ssh -p 2222 -i "${SSH_KEY}" \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    test@localhost "rm -f /tmp/destroy-test-marker /tmp/destroy-test-artifact" 2>/dev/null || true
+
+rm -f "${WORK_DIR}/terraform.tfstate" "${WORK_DIR}/terraform.tfstate.backup"
+
 echo -e "\n${GREEN}${BOLD}All e2e tests passed!${RESET}"

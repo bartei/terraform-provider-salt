@@ -16,8 +16,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/bartei/terraform-provider-salt/pkg/salt"
@@ -43,6 +43,8 @@ type SaltStateModel struct {
 	SaltVersion     types.String `tfsdk:"salt_version"`
 	States          types.Map    `tfsdk:"states"`
 	Pillar          types.Map    `tfsdk:"pillar"`
+	DestroyStates   types.Map    `tfsdk:"destroy_states"`
+	DestroyPillar   types.Map    `tfsdk:"destroy_pillar"`
 	Triggers        types.Map    `tfsdk:"triggers"`
 	SSHTimeout      types.Int64  `tfsdk:"ssh_timeout"`
 	SaltTimeout     types.Int64  `tfsdk:"salt_timeout"`
@@ -119,6 +121,16 @@ func (r *SaltStateResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				Optional:    true,
 				ElementType: types.StringType,
 			},
+			"destroy_states": schema.MapAttribute{
+				Description: "Map of state file paths to their contents, applied during terraform destroy before cleaning up remote files. Use this to reverse the effects of the main states (e.g. unmount filesystems, stop services).",
+				Optional:    true,
+				ElementType: types.StringType,
+			},
+			"destroy_pillar": schema.MapAttribute{
+				Description: "Pillar data to pass to destroy states.",
+				Optional:    true,
+				ElementType: types.StringType,
+			},
 			"triggers": schema.MapAttribute{
 				Description: "Arbitrary map of values that, when changed, trigger re-application of states.",
 				Optional:    true,
@@ -146,16 +158,15 @@ func (r *SaltStateResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				Description: "Hash of the last successful salt-call output.",
 				Computed:    true,
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-					reapplyOnDrift{},
+					unknownOnAnyChange{inputsChanged: saltStateInputsChanged},
 				},
 			},
 			"state_output": schema.StringAttribute{
 				Description: "Raw JSON output from the last salt-call run.",
 				Computed:    true,
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-					unknownOnDrift{},
+					unknownOnAnyChange{inputsChanged: saltStateInputsChanged},
+					unknownWhenHashCleared{},
 				},
 			},
 		},
@@ -278,7 +289,10 @@ func (r *SaltStateResource) Delete(ctx context.Context, req resource.DeleteReque
 		return
 	}
 
-	if data.KeepRemoteFiles.ValueBool() {
+	destroyStates := extractStringMap(ctx, data.DestroyStates)
+
+	// If no destroy states and keep_remote_files is set, nothing to do
+	if len(destroyStates) == 0 && data.KeepRemoteFiles.ValueBool() {
 		return
 	}
 
@@ -289,8 +303,19 @@ func (r *SaltStateResource) Delete(ctx context.Context, req resource.DeleteReque
 	}
 	defer func() { _ = client.Close() }()
 
-	// Clean up this resource's working directory
-	_, _ = client.Run(fmt.Sprintf("sudo rm -rf %s", salt.WorkDir(data.ID.ValueString())))
+	// Apply destroy states if configured
+	if len(destroyStates) > 0 {
+		diags := r.applyDestroyStates(ctx, client, &data, destroyStates)
+		resp.Diagnostics.Append(diags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
+	if !data.KeepRemoteFiles.ValueBool() {
+		// Clean up this resource's working directory
+		_, _ = client.Run(fmt.Sprintf("sudo rm -rf %s", salt.WorkDir(data.ID.ValueString())))
+	}
 }
 
 func (r *SaltStateResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
@@ -414,6 +439,88 @@ func (r *SaltStateResource) applySalt(ctx context.Context, data *SaltStateModel,
 	return result, diags
 }
 
+// applyDestroyStates uploads and applies the destroy_states on the remote host
+// during terraform destroy. It uses a separate working directory to avoid
+// interfering with the main states.
+func (r *SaltStateResource) applyDestroyStates(ctx context.Context, client *ssh.Client, data *SaltStateModel, destroyStates map[string]string) diag.Diagnostics {
+	var diags diag.Diagnostics
+	host := data.Host.ValueString()
+
+	// Determine Salt version
+	saltVersion := r.defaultSaltVersion
+	if !data.SaltVersion.IsNull() && !data.SaltVersion.IsUnknown() {
+		saltVersion = data.SaltVersion.ValueString()
+	}
+	if saltVersion == "" {
+		saltVersion = "latest"
+	}
+	if err := salt.EnsureVersion(client, saltVersion); err != nil {
+		diags.AddError(
+			fmt.Sprintf("Salt bootstrap failed on %s during destroy", host),
+			fmt.Sprintf("Failed to install Salt version %q.\n\n%s", saltVersion, err.Error()),
+		)
+		return diags
+	}
+
+	// Use a separate workdir for destroy states so they don't collide with
+	// the main states (which may still be on disk if keep_remote_files is true)
+	workDir := salt.WorkDir(data.ID.ValueString()) + "-destroy"
+	destroyPillar := extractStringMap(ctx, data.DestroyPillar)
+
+	if err := salt.UploadStates(client, destroyStates, workDir); err != nil {
+		diags.AddError(
+			fmt.Sprintf("Destroy state upload to %s failed", host),
+			err.Error(),
+		)
+		return diags
+	}
+
+	if err := salt.UploadPillar(client, destroyPillar, workDir); err != nil {
+		diags.AddError(
+			fmt.Sprintf("Destroy pillar upload to %s failed", host),
+			err.Error(),
+		)
+		return diags
+	}
+
+	saltTimeout := int64(300)
+	if !data.SaltTimeout.IsNull() && !data.SaltTimeout.IsUnknown() {
+		saltTimeout = data.SaltTimeout.ValueInt64()
+	}
+
+	result, err := salt.Apply(client, destroyPillar, workDir, int(saltTimeout))
+	if err != nil {
+		diags.AddError(
+			fmt.Sprintf("Salt destroy failed on %s", host),
+			err.Error(),
+		)
+		return diags
+	}
+
+	if !result.Success {
+		diags.AddError(
+			fmt.Sprintf("Salt destroy states failed on %s", host),
+			result.FailedStates(),
+		)
+		return diags
+	}
+
+	// Clean up the destroy workdir
+	_, _ = client.Run(fmt.Sprintf("sudo rm -rf %s", workDir))
+
+	if result.Stderr != "" {
+		stderr := salt.CleanStderr(result.Stderr)
+		if stderr != "" {
+			diags.AddWarning(
+				fmt.Sprintf("Salt warnings during destroy on %s", host),
+				stderr,
+			)
+		}
+	}
+
+	return diags
+}
+
 func extractStringMap(ctx context.Context, m types.Map) map[string]string {
 	if m.IsNull() || m.IsUnknown() {
 		return nil
@@ -427,52 +534,92 @@ func extractStringMap(ctx context.Context, m types.Map) map[string]string {
 	return result
 }
 
-// reapplyOnDrift marks applied_hash as unknown when Read() cleared it to "",
-// which tells Terraform the value needs recomputing and triggers an Update.
-type reapplyOnDrift struct{}
-
-func (m reapplyOnDrift) Description(_ context.Context) string {
-	return "Triggers re-application when drift is detected (applied_hash cleared to empty)."
+// saltStateInputsChanged returns true if any input attributes of SaltStateModel
+// differ between state and plan.
+func saltStateInputsChanged(ctx context.Context, stateRaw, planRaw tfsdk.State) bool {
+	var state, plan SaltStateModel
+	if diags := stateRaw.Get(ctx, &state); diags.HasError() {
+		return true // err on the side of re-applying
+	}
+	if diags := planRaw.Get(ctx, &plan); diags.HasError() {
+		return true
+	}
+	return !state.States.Equal(plan.States) ||
+		!state.Pillar.Equal(plan.Pillar) ||
+		!state.Triggers.Equal(plan.Triggers) ||
+		!state.Host.Equal(plan.Host) ||
+		!state.User.Equal(plan.User) ||
+		!state.PrivateKey.Equal(plan.PrivateKey) ||
+		!state.SaltVersion.Equal(plan.SaltVersion)
 }
 
-func (m reapplyOnDrift) MarkdownDescription(ctx context.Context) string {
+// unknownOnAnyChange marks a computed attribute as unknown whenever the resource
+// will be updated. This prevents the "Provider produced inconsistent result
+// after apply" error that occurs when plan predicts a concrete value for
+// applied_hash/state_output but apply produces a different one (because
+// salt-call test=True output differs from actual apply output).
+//
+// It accepts an optional inputsChanged function that compares plan vs state
+// to detect config changes. If nil, the modifier only detects drift.
+type unknownOnAnyChange struct {
+	inputsChanged func(ctx context.Context, state, plan tfsdk.State) bool
+}
+
+func (m unknownOnAnyChange) Description(_ context.Context) string {
+	return "Marks attribute as unknown when resource will be updated, preserves state otherwise."
+}
+
+func (m unknownOnAnyChange) MarkdownDescription(ctx context.Context) string {
 	return m.Description(ctx)
 }
 
-func (m reapplyOnDrift) PlanModifyString(_ context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
-	// On create, there's no state yet — nothing to do
+func (m unknownOnAnyChange) PlanModifyString(ctx context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
+	// On create, there's no prior state — leave as unknown (the default for computed attrs)
 	if req.StateValue.IsNull() {
 		return
 	}
 
-	// If Read() cleared the hash to "" (drift detected), mark as unknown
-	// so Terraform sees a diff and schedules an Update
+	// If drift was detected, Read() clears applied_hash to "" — mark unknown
+	// so Terraform sees a diff and schedules an Update.
 	if req.StateValue.ValueString() == "" {
 		resp.PlanValue = types.StringUnknown()
+		return
 	}
+
+	// Check if any input attributes changed between state and plan.
+	// We need to wrap the plan as a tfsdk.State so both can be read uniformly.
+	if m.inputsChanged != nil {
+		planAsState := tfsdk.State{Schema: req.State.Schema, Raw: req.Plan.Raw}
+		if m.inputsChanged(ctx, req.State, planAsState) {
+			resp.PlanValue = types.StringUnknown()
+			return
+		}
+	}
+
+	// Nothing changed — preserve the current state value
+	resp.PlanValue = req.StateValue
 }
 
-// unknownOnDrift marks an attribute as unknown when applied_hash was cleared
-// (drift detected), so Terraform knows it will be recomputed during apply.
-type unknownOnDrift struct{}
+// unknownWhenHashCleared marks state_output as unknown when applied_hash was
+// cleared to "" by Read() (drift detected). Without this, the plan preserves
+// the old state_output value but apply produces a new one → inconsistent result.
+type unknownWhenHashCleared struct{}
 
-func (m unknownOnDrift) Description(_ context.Context) string {
-	return "Marks attribute as unknown when drift is detected."
+func (m unknownWhenHashCleared) Description(_ context.Context) string {
+	return "Marks state_output as unknown when applied_hash was cleared (drift detected)."
 }
 
-func (m unknownOnDrift) MarkdownDescription(ctx context.Context) string {
+func (m unknownWhenHashCleared) MarkdownDescription(ctx context.Context) string {
 	return m.Description(ctx)
 }
 
-func (m unknownOnDrift) PlanModifyString(ctx context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
+func (m unknownWhenHashCleared) PlanModifyString(ctx context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
 	if req.StateValue.IsNull() {
 		return
 	}
 
-	// Read applied_hash from the current state to see if drift was detected
 	var state SaltStateModel
-	diags := req.State.Get(ctx, &state)
-	if diags.HasError() {
+	if diags := req.State.Get(ctx, &state); diags.HasError() {
 		return
 	}
 	if state.AppliedHash.ValueString() == "" {

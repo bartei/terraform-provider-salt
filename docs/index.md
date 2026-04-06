@@ -19,6 +19,8 @@ The Salt provider manages configuration on remote Linux hosts using [Salt](https
 
 On subsequent `terraform plan`, the provider runs `salt-call test=True` to detect drift. If the remote host has changed, Terraform will show the resource as needing an update.
 
+On `terraform destroy`, the provider optionally applies **destroy states** (to reverse changes like stopping services or unmounting filesystems) before cleaning up remote files.
+
 ## Authentication
 
 The provider uses **SSH key-based authentication only**. Pass the private key contents directly via the `private_key` attribute (typically using Terraform's `file()` function). Password authentication, SSH agent forwarding, and bastion hosts are not supported.
