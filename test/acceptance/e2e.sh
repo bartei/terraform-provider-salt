@@ -72,10 +72,60 @@ pass "Workspace ready at ${WORK_DIR}"
 
 # ── Step 3: Terraform apply ──
 step "terraform apply"
+APPLY_START=$(date +%s)
 terraform apply -auto-approve \
     -var="ssh_private_key_file=${SSH_KEY}" \
     -var='greeting=Hello from Terraform + Salt!'
-pass "Apply succeeded"
+APPLY_DURATION=$(( $(date +%s) - APPLY_START ))
+pass "Apply succeeded (${APPLY_DURATION}s)"
+
+# ── Step 3b: Verify masterless invariants ──
+# Cold bootstrap must not hang on salt-minion's master DNS-retry loop. We
+# install masterless: the minion package is on disk for salt-call, but the
+# service itself must be killed/disabled/masked.
+step "Verifying masterless invariants"
+
+# systemctl is-{enabled,active} return non-zero when the unit is in a
+# state the test expects (masked / failed) — wrap each in `|| true` so
+# `set -e` doesn't kill the script.
+MINION_STATE=$(ssh -p 2222 -i "${SSH_KEY}" \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    test@localhost "systemctl is-enabled salt-minion 2>&1 || true; systemctl is-active salt-minion 2>&1 || true" 2>/dev/null)
+
+if echo "${MINION_STATE}" | head -1 | grep -q '^masked$'; then
+    pass "salt-minion is masked"
+else
+    fail "salt-minion should be masked, got: $(echo "${MINION_STATE}" | head -1)"
+fi
+
+if echo "${MINION_STATE}" | tail -1 | grep -qE '^(inactive|failed)$'; then
+    pass "salt-minion is not running"
+else
+    fail "salt-minion should be inactive/failed, got: $(echo "${MINION_STATE}" | tail -1)"
+fi
+
+# If the bootstrap path took longer than ~60s we very likely re-introduced
+# the DNS-retry hang. A clean cold install completes in well under 30s.
+if (( APPLY_DURATION > 60 )); then
+    fail "Cold apply took ${APPLY_DURATION}s — suspect salt-minion DNS-retry hang regression"
+else
+    pass "Cold apply finished within 60s (${APPLY_DURATION}s)"
+fi
+
+# Count salt-minion "Retrying in 30 seconds" lines. The package postinst
+# may briefly start the minion before we kill it, so one line is OK; two
+# or more means we waited at least 30s for graceful shutdown.
+RETRY_COUNT=$(ssh -p 2222 -i "${SSH_KEY}" \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    test@localhost "sudo journalctl -u salt-minion --no-pager 2>/dev/null | grep -c 'Retrying in 30 seconds' || true" 2>/dev/null | tr -d '[:space:]')
+
+if [[ -z "${RETRY_COUNT}" ]] || (( RETRY_COUNT <= 1 )); then
+    pass "No DNS-retry hang during bootstrap (${RETRY_COUNT:-0} retry lines)"
+else
+    fail "Bootstrap hung in DNS-retry loop (${RETRY_COUNT} 'Retrying in 30 seconds' lines)"
+fi
 
 # ── Step 4: Verify the file was created on the VM ──
 step "Verifying managed file on VM"

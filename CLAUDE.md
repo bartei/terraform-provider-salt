@@ -4,6 +4,12 @@
 
 Terraform provider for Salt (masterless mode via SSH). Go module: `github.com/bartei/terraform-provider-salt`.
 
+## Masterless-only contract
+
+The provider only supports `salt-call --local`. There is no master, no minion daemon, no scheduler. After bootstrap the `salt-minion.service` unit is killed (SIGKILL), disabled, and **masked**. Do not introduce code paths that talk to a master, manage `/etc/salt/master`, or start the minion service — these would violate the contract documented in `docs/index.md`.
+
+If a fresh host is slow to provision, the first thing to check is whether something is starting `salt-minion` and hanging in the master DNS-retry loop (default `salt`). The bootstrap path uses `-X` plus the kill/disable/mask sequence in `pkg/salt/bootstrap.go` to prevent this — keep them in sync if you change install logic.
+
 ## Pre-push checklist
 
 Before committing and pushing, always run these checks and fix any issues:

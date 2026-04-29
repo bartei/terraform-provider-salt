@@ -7,10 +7,20 @@ Instead of running a Salt master/minion infrastructure, this provider SSHes into
 ## Features
 
 - **Masterless Salt** — uses `salt-call --local`, no Salt master or minion daemon required
-- **Automatic bootstrapping** — installs the specified Salt version on the target if missing
+- **Automatic bootstrapping** — installs the specified Salt version on the target if missing, and disables/masks `salt-minion` so no daemon ever runs
 - **Drift detection** — `terraform plan` detects configuration drift via `salt-call test=True`
-- *[pkg](pkg)*Pillar data from Terraform** — pass Terraform variables directly as Salt pillar data
+- **Pillar data from Terraform** — pass Terraform variables directly as Salt pillar data
 - **Trigger-based re-apply** — use `triggers` to force re-application when inputs change
+
+## Masterless-only
+
+This provider is strictly masterless. There is no master, no event bus, no scheduler, no long-running minion. Every apply is a one-shot `salt-call --local` over SSH.
+
+After bootstrap, the `salt-minion.service` unit is killed (SIGKILL), disabled, and **masked** on the target. This is intentional:
+
+- The `salt-call` binary stays available — it's what the provider invokes via `--local`.
+- The minion daemon never runs. Out of the box it would otherwise try to reach a master called `salt` and retry every 30 seconds, slowing every cold bootstrap by ~90s and filling journals with errors.
+- If you later want managed master/minion on a host, you must `systemctl unmask salt-minion` yourself and configure it. The provider will not undo the mask.
 
 ## Requirements
 

@@ -21,6 +21,23 @@ On subsequent `terraform plan`, the provider runs `salt-call test=True` to detec
 
 On `terraform destroy`, the provider optionally applies **destroy states** (to reverse changes like stopping services or unmounting filesystems) before cleaning up remote files.
 
+## Masterless-only
+
+This provider is strictly masterless. There is no Salt master, no event bus, no scheduler, no minion daemon involved at runtime. Every state application is a one-shot `salt-call --local` invocation over SSH, driven by Terraform.
+
+To make this contract reliable, the bootstrap step:
+
+1. Passes `-X` to `bootstrap-salt.sh` so the install does not start the minion daemon.
+2. After install, runs `systemctl mask`, then `systemctl kill -s KILL`, then `systemctl disable` against `salt-minion`. This is idempotent and tolerates a unit that doesn't exist.
+
+The forceful kill is deliberate: a freshly installed minion immediately tries to resolve the default master hostname `salt`, fails, then retries every 30 seconds. A graceful `systemctl stop` waits for that loop to finish (up to systemd's `TimeoutStopSec`, typically 90s) before SIGKILL. SIGKILL up front skips the wait, so cold provisioning takes seconds rather than minutes.
+
+**What this means for your hosts:**
+
+- The `salt-call` binary is installed (it's needed for `--local`), but the `salt-minion.service` unit is masked and will not start. `systemctl is-enabled salt-minion` will report `masked`.
+- No master configuration is written. The provider does not connect to or care about any Salt master.
+- If you want to switch a host back to a managed master/minion topology later, you'll need to `systemctl unmask salt-minion` and configure it manually — this provider will not undo that masking.
+
 ## Authentication
 
 The provider uses **SSH key-based authentication only**. Pass the private key contents directly via the `private_key` attribute (typically using Terraform's `file()` function). Password authentication, SSH agent forwarding, and bastion hosts are not supported.
