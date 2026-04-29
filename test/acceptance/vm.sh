@@ -1,30 +1,57 @@
 #!/usr/bin/env bash
 #
-# vm.sh — manage a QEMU Debian VM for acceptance testing
+# vm.sh — manage a QEMU VM for acceptance testing.
+#
+# Supports multiple distros via the DISTRO env var. Add a new distro by
+# defining it in `configure_distro` below — no other changes needed.
 #
 # Usage:
-#   ./vm.sh start   — download image (if needed), generate SSH key, boot VM
-#   ./vm.sh stop    — kill the VM and clean up
-#   ./vm.sh status  — check if the VM is running
-#   ./vm.sh ssh     — open an interactive SSH session to the VM
+#   DISTRO=debian ./vm.sh start    # default
+#   DISTRO=fedora ./vm.sh start
+#   ./vm.sh stop | status | ssh
 #
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VM_DIR="${SCRIPT_DIR}/.vm"
 
-# VM configuration
-DEBIAN_VERSION="12"
-IMAGE_URL="https://cloud.debian.org/images/cloud/bookworm/latest/debian-${DEBIAN_VERSION}-generic-amd64.qcow2"
-BASE_IMAGE="${VM_DIR}/debian-${DEBIAN_VERSION}-base.qcow2"
-VM_DISK="${VM_DIR}/vm-disk.qcow2"
-CIDATA_ISO="${VM_DIR}/cidata.iso"
-SSH_KEY="${VM_DIR}/id_ed25519"
-PIDFILE="${VM_DIR}/qemu.pid"
+# Per-distro VM configuration. To add a new distro:
+#   1. Add a new case branch with IMAGE_URL and IMAGE_FILENAME.
+#   2. (Optional) override SELINUX_PERMISSIVE if the image ships SELinux
+#      enforcing — we set it permissive during test to avoid surprises.
+configure_distro() {
+    DISTRO="${DISTRO:-debian}"
+    SELINUX_PERMISSIVE="false"
+
+    case "${DISTRO}" in
+        debian)
+            IMAGE_URL="https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2"
+            IMAGE_FILENAME="debian-12-base.qcow2"
+            ;;
+        fedora)
+            IMAGE_URL="https://download.fedoraproject.org/pub/fedora/linux/releases/42/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-42-1.1.x86_64.qcow2"
+            IMAGE_FILENAME="fedora-42-base.qcow2"
+            SELINUX_PERMISSIVE="true"
+            ;;
+        *)
+            echo "ERROR: unknown DISTRO='${DISTRO}'. Supported: debian, fedora" >&2
+            exit 1
+            ;;
+    esac
+
+    BASE_IMAGE="${VM_DIR}/${IMAGE_FILENAME}"
+    VM_DISK="${VM_DIR}/${DISTRO}-vm-disk.qcow2"
+    CIDATA_ISO="${VM_DIR}/${DISTRO}-cidata.iso"
+    SSH_KEY="${VM_DIR}/id_ed25519"
+    PIDFILE="${VM_DIR}/${DISTRO}-qemu.pid"
+}
+
+configure_distro
+
 SSH_PORT="${ACC_SSH_PORT:-2222}"
 VM_MEMORY="${ACC_VM_MEMORY:-1024}"
 
-log() { echo "==> $*" >&2; }
+log() { echo "==> [${DISTRO}] $*" >&2; }
 
 ensure_vm_dir() {
     mkdir -p "${VM_DIR}"
@@ -35,7 +62,7 @@ download_image() {
         log "Base image already exists: ${BASE_IMAGE}"
         return
     fi
-    log "Downloading Debian ${DEBIAN_VERSION} cloud image..."
+    log "Downloading ${DISTRO} cloud image..."
     curl -fSL --progress-bar -o "${BASE_IMAGE}.tmp" "${IMAGE_URL}"
     mv "${BASE_IMAGE}.tmp" "${BASE_IMAGE}"
     log "Download complete."
@@ -57,9 +84,19 @@ create_cloud_init() {
     log "Creating cloud-init seed ISO..."
 
     cat > "${VM_DIR}/meta-data" <<EOF
-instance-id: tf-salt-acc-test
-local-hostname: salt-test
+instance-id: tf-salt-acc-test-${DISTRO}
+local-hostname: salt-test-${DISTRO}
 EOF
+
+    # Build runcmd entries dynamically so distros that need extra setup
+    # (e.g. SELinux permissive on Fedora) can express it here without a
+    # second cloud-init template.
+    local runcmd_extras=""
+    if [[ "${SELINUX_PERMISSIVE}" == "true" ]]; then
+        runcmd_extras="
+  - setenforce 0 || true
+  - sed -i 's/^SELINUX=enforcing/SELINUX=permissive/' /etc/selinux/config || true"
+    fi
 
     cat > "${VM_DIR}/user-data" <<EOF
 #cloud-config
@@ -70,16 +107,14 @@ users:
     ssh_authorized_keys:
       - ${pubkey}
 
-# Disable automatic apt updates to avoid lock contention during tests
+# Disable automatic package updates to avoid lock contention during tests
 package_update: false
 package_upgrade: false
 
-# Signal that cloud-init is done
-runcmd:
+runcmd:${runcmd_extras}
   - touch /var/lib/cloud/instance/boot-finished-signal
 EOF
 
-    # Create the ISO — try genisoimage first, then mkisofs, then xorrisofs
     local iso_cmd=""
     if command -v genisoimage &>/dev/null; then
         iso_cmd="genisoimage"
@@ -115,7 +150,6 @@ start_vm() {
 
     log "Starting QEMU VM (SSH port ${SSH_PORT}, memory ${VM_MEMORY}M)..."
 
-    # Check for KVM support
     local accel_opts="-accel tcg"
     if [[ -w /dev/kvm ]]; then
         accel_opts="-accel kvm"
@@ -135,7 +169,7 @@ start_vm() {
         -device virtio-net-pci,netdev=net0 \
         -pidfile "${PIDFILE}" \
         -daemonize \
-        -serial file:"${VM_DIR}/console.log"
+        -serial file:"${VM_DIR}/${DISTRO}-console.log"
 
     log "VM started. Waiting for SSH..."
     wait_for_ssh
@@ -159,7 +193,7 @@ wait_for_ssh() {
     done
     log "ERROR: SSH did not become available after $((max_attempts * 2)) seconds"
     log "Console log:"
-    tail -20 "${VM_DIR}/console.log" >&2
+    tail -20 "${VM_DIR}/${DISTRO}-console.log" >&2
     exit 1
 }
 
@@ -170,7 +204,6 @@ stop_vm() {
         if kill -0 "${pid}" 2>/dev/null; then
             log "Stopping VM (PID ${pid})..."
             kill "${pid}" 2>/dev/null || true
-            # Wait for process to exit
             local i=0
             while kill -0 "${pid}" 2>/dev/null && (( i < 10 )); do
                 sleep 1
@@ -186,9 +219,8 @@ stop_vm() {
         log "VM is not running (no pidfile)"
     fi
 
-    # Clean up ephemeral files (keep the base image for speed)
     rm -f "${VM_DISK}" "${CIDATA_ISO}" "${PIDFILE}" 2>/dev/null || true
-    rm -f "${VM_DIR}/meta-data" "${VM_DIR}/user-data" "${VM_DIR}/console.log" 2>/dev/null || true
+    rm -f "${VM_DIR}/meta-data" "${VM_DIR}/user-data" "${VM_DIR}/${DISTRO}-console.log" 2>/dev/null || true
     rm -f "${SSH_KEY}" "${SSH_KEY}.pub" 2>/dev/null || true
     log "Cleaned up."
 }
@@ -218,7 +250,7 @@ case "${1:-help}" in
     status) status_vm ;;
     ssh)    do_ssh ;;
     *)
-        echo "Usage: $0 {start|stop|status|ssh}" >&2
+        echo "Usage: DISTRO={debian|fedora} $0 {start|stop|status|ssh}" >&2
         exit 1
         ;;
 esac

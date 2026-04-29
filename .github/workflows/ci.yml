@@ -65,3 +65,48 @@ jobs:
             fi
           done
           echo "All documentation files present."
+
+  acceptance:
+    name: acceptance (${{ matrix.distro }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Add a new entry here to test another distro. The case must also
+        # be defined in test/acceptance/vm.sh's configure_distro().
+        distro: [debian, fedora]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Install QEMU + xorriso
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils xorriso
+          # GitHub Actions ubuntu runners ship /dev/kvm; make it writable
+          # for the runner user so vm.sh's KVM detection succeeds.
+          sudo chmod 666 /dev/kvm || true
+          ls -la /dev/kvm || true
+
+      - name: Run acceptance tests (${{ matrix.distro }})
+        run: make e2e DISTRO=${{ matrix.distro }}
+
+      - name: Capture VM console log on failure
+        if: failure()
+        run: |
+          tail -200 test/acceptance/.vm/${{ matrix.distro }}-console.log || true
+
+      - name: Stop VM
+        if: always()
+        run: make vm-stop DISTRO=${{ matrix.distro }} || true

@@ -7,7 +7,10 @@ terraform {
 }
 
 provider "salt" {
-  salt_version = "3007"
+  # Default to whatever the salt-bootstrap script provides for the target
+  # distro. Pin a specific version (e.g. "3007") if your fleet is uniform
+  # and you know that version is available on every target's distro.
+  salt_version = "latest"
 }
 
 variable "ssh_host" {

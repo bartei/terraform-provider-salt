@@ -18,8 +18,13 @@ func SaltCallCmd() string {
 }
 
 // FindSaltCall returns the version string if salt-call is installed, or empty string if not.
+//
+// Uses sudo to match the actual salt-call invocation pattern (SaltCallCmd).
+// Without sudo, hosts where the salt onedir is root-only (or where any
+// component of /opt/saltstack/salt is mode 0700) report salt-call as
+// missing, causing EnsureVersion to re-bootstrap on every apply.
 func FindSaltCall(client *ssh.Client) string {
-	cmd := fmt.Sprintf(`env "PATH=%s:$PATH" salt-call --version 2>/dev/null || echo 'not-installed'`, saltPath)
+	cmd := fmt.Sprintf(`%s --version 2>/dev/null || echo 'not-installed'`, SaltCallCmd())
 	out, _ := client.Run(cmd)
 	if strings.Contains(out, "not-installed") {
 		return ""
@@ -33,6 +38,13 @@ func FindSaltCall(client *ssh.Client) string {
 // Special values:
 //   - "latest": ensures Salt is installed (any version), bootstraps if missing.
 //   - A version number like "3007": ensures that specific version is present.
+//
+// When a specific version is requested but a different version is already
+// installed, we fail loudly rather than try to re-bootstrap. salt-bootstrap's
+// re-install path is unreliable across distros (e.g. on Fedora it ignores
+// the version argument when /etc/yum.repos.d/salt.repo already exists, and
+// its post-install service check can fail when salt-minion is masked).
+// Failing loudly gives the operator a clear signal and avoids silent drift.
 func EnsureVersion(client *ssh.Client, version string) error {
 	installed := FindSaltCall(client)
 
@@ -43,11 +55,33 @@ func EnsureVersion(client *ssh.Client, version string) error {
 		return bootstrap(client, "")
 	}
 
+	if installed == "" {
+		if err := bootstrap(client, version); err != nil {
+			return err
+		}
+		// Verify the install actually produced the requested version.
+		// salt-bootstrap on some distros (notably Fedora) silently installs
+		// a different version when the requested one isn't in its repo.
+		got := FindSaltCall(client)
+		if !strings.Contains(got, version) {
+			return fmt.Errorf(
+				"bootstrap installed Salt version %q but %q was requested — "+
+					"salt-bootstrap does not appear to have a build of %q for this distro. "+
+					"Pin salt_version to a version your distro supports, or use \"latest\"",
+				strings.TrimSpace(got), version, version)
+		}
+		return nil
+	}
+
 	if strings.Contains(installed, version) {
 		return nil
 	}
 
-	return bootstrap(client, version)
+	return fmt.Errorf(
+		"installed Salt version %q does not match requested %q on the target host. "+
+			"This provider does not perform in-place upgrades — uninstall Salt manually "+
+			"and re-apply, or change salt_version to match what is installed",
+		strings.TrimSpace(installed), version)
 }
 
 func bootstrap(client *ssh.Client, version string) error {

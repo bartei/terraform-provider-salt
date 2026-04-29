@@ -8,14 +8,17 @@
 #   - go installed
 #
 # Usage:
-#   ./test/acceptance/e2e.sh
+#   DISTRO=debian ./test/acceptance/e2e.sh    # default
+#   DISTRO=fedora ./test/acceptance/e2e.sh
 #
 set -euo pipefail
+
+DISTRO="${DISTRO:-debian}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 VM_DIR="${SCRIPT_DIR}/.vm"
-WORK_DIR="${SCRIPT_DIR}/.e2e"
+WORK_DIR="${SCRIPT_DIR}/.e2e-${DISTRO}"
 SSH_KEY="${VM_DIR}/id_ed25519"
 
 RED='\033[0;31m'
@@ -127,6 +130,55 @@ else
     fail "Bootstrap hung in DNS-retry loop (${RETRY_COUNT} 'Retrying in 30 seconds' lines)"
 fi
 
+# ── Step 3c: Second apply must NOT re-bootstrap ──
+# Regression guard: FindSaltCall used to run `salt-call --version` without
+# sudo, which silently failed on hosts where /opt/saltstack/salt is
+# root-only. EnsureVersion then re-invoked the bootstrap script on every
+# apply. We assert here that a second apply detects the existing install
+# and runs in seconds, with no fresh "Retrying in 30 seconds" lines added
+# to the journal.
+step "Second apply (regression guard: no re-bootstrap)"
+
+# Snapshot current retry-count so we can detect any new lines.
+PRE_RETRY=$(ssh -p 2222 -i "${SSH_KEY}" \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    test@localhost "sudo journalctl -u salt-minion --no-pager 2>/dev/null | grep -c 'Retrying in 30 seconds' || true" 2>/dev/null | tr -d '[:space:]')
+
+# -replace forces a Delete+Create cycle on the resource without requiring
+# any input change — both phases invoke applySalt → EnsureVersion, which
+# is what we want to exercise. The file contents stay identical, so the
+# subsequent verification step still expects the original greeting.
+APPLY2_START=$(date +%s)
+terraform apply -auto-approve \
+    -replace=salt_state.example \
+    -var="ssh_private_key_file=${SSH_KEY}" \
+    -var='greeting=Hello from Terraform + Salt!'
+APPLY2_DURATION=$(( $(date +%s) - APPLY2_START ))
+pass "Second apply succeeded (${APPLY2_DURATION}s)"
+
+# A second apply against an already-bootstrapped host should be quick.
+# 30s is generous — typical is 1–5s. Anything longer means EnsureVersion
+# re-ran the bootstrap script.
+if (( APPLY2_DURATION > 30 )); then
+    fail "Second apply took ${APPLY2_DURATION}s — bootstrap likely re-ran (FindSaltCall regression)"
+else
+    pass "Second apply finished within 30s (${APPLY2_DURATION}s)"
+fi
+
+POST_RETRY=$(ssh -p 2222 -i "${SSH_KEY}" \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    test@localhost "sudo journalctl -u salt-minion --no-pager 2>/dev/null | grep -c 'Retrying in 30 seconds' || true" 2>/dev/null | tr -d '[:space:]')
+
+PRE_RETRY="${PRE_RETRY:-0}"
+POST_RETRY="${POST_RETRY:-0}"
+if (( POST_RETRY > PRE_RETRY )); then
+    fail "Second apply produced new salt-minion DNS retries (${PRE_RETRY} → ${POST_RETRY}) — bootstrap re-ran"
+else
+    pass "Second apply did not start salt-minion (${POST_RETRY} retry lines, unchanged)"
+fi
+
 # ── Step 4: Verify the file was created on the VM ──
 step "Verifying managed file on VM"
 ACTUAL=$(ssh -p 2222 -i "${SSH_KEY}" \
@@ -229,7 +281,7 @@ terraform {
 }
 
 provider "salt" {
-  salt_version = "3007"
+  salt_version = "latest"
 }
 
 variable "ssh_private_key_file" {
@@ -346,10 +398,17 @@ OS_VAL=$(terraform output -raw os)
 KERNEL_VAL=$(terraform output -raw kernel)
 GRAIN_COUNT=$(terraform output -raw grain_count)
 
-if [[ "${OS_VAL}" == "Debian" ]]; then
+# Map DISTRO → expected os grain so the test stays distro-aware.
+case "${DISTRO}" in
+    debian) EXPECTED_OS="Debian" ;;
+    fedora) EXPECTED_OS="Fedora" ;;
+    *)      EXPECTED_OS="" ;;
+esac
+
+if [[ -n "${EXPECTED_OS}" && "${OS_VAL}" == "${EXPECTED_OS}" ]]; then
     pass "Grains: os = ${OS_VAL}"
 else
-    fail "Expected os=Debian, got: ${OS_VAL}"
+    fail "Expected os=${EXPECTED_OS}, got: ${OS_VAL}"
 fi
 
 if [[ "${KERNEL_VAL}" == "Linux" ]]; then
@@ -438,7 +497,10 @@ ssh -p 2222 -i "${SSH_KEY}" \
     -o StrictHostKeyChecking=no \
     -o UserKnownHostsFile=/dev/null \
     test@localhost "
-sudo apt-get install -y git >/dev/null 2>&1
+if command -v git >/dev/null 2>&1; then :;
+elif command -v apt-get >/dev/null 2>&1; then sudo apt-get install -y git >/dev/null 2>&1;
+elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y git >/dev/null 2>&1;
+fi
 rm -rf /tmp/test-formula
 mkdir -p /tmp/test-formula/testformula
 cd /tmp/test-formula
@@ -464,7 +526,7 @@ terraform {
 }
 
 provider "salt" {
-  salt_version = "3007"
+  salt_version = "latest"
 }
 
 variable "ssh_private_key_file" { type = string }
@@ -530,7 +592,7 @@ terraform {
 }
 
 provider "salt" {
-  salt_version = "3007"
+  salt_version = "latest"
 }
 
 variable "ssh_private_key_file" { type = string }
