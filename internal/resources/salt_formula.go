@@ -223,6 +223,12 @@ func (r *SaltFormulaResource) Read(ctx context.Context, req resource.ReadRequest
 	}
 	defer func() { _ = client.Close() }()
 
+	// Serialize all on-host Salt operations against this host so concurrent
+	// resources don't race on bootstrap or salt-call's per-minion lock.
+	mu := salt.HostLockFor(client.Host)
+	mu.Lock()
+	defer mu.Unlock()
+
 	// Clone/update the formula for testing
 	if err := r.cloneFormula(client, &data); err != nil {
 		resp.Diagnostics.AddWarning("Drift detection failed",
@@ -380,6 +386,12 @@ func (r *SaltFormulaResource) applyFormula(ctx context.Context, data *SaltFormul
 		return nil, diags
 	}
 	defer func() { _ = client.Close() }()
+
+	// Serialize all on-host Salt operations against this host so concurrent
+	// resources don't race on bootstrap or salt-call's per-minion lock.
+	mu := salt.HostLockFor(client.Host)
+	mu.Lock()
+	defer mu.Unlock()
 
 	// Determine Salt version
 	saltVersion := r.defaultSaltVersion

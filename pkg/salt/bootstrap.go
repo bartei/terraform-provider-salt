@@ -45,6 +45,11 @@ func FindSaltCall(client *ssh.Client) string {
 // the version argument when /etc/yum.repos.d/salt.repo already exists, and
 // its post-install service check can fail when salt-minion is masked).
 // Failing loudly gives the operator a clear signal and avoids silent drift.
+// Concurrency: callers must hold HostLockFor(client.Host) when invoking
+// EnsureVersion so that bootstrap and the salt-call ops that follow all
+// run serialized per host. EnsureVersion itself is *not* internally locked
+// because the resource layer needs to hold the same lock through Apply/
+// Test, and a second Lock() here would deadlock.
 func EnsureVersion(client *ssh.Client, version string) error {
 	installed := FindSaltCall(client)
 

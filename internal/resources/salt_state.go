@@ -217,6 +217,12 @@ func (r *SaltStateResource) Read(ctx context.Context, req resource.ReadRequest, 
 	}
 	defer func() { _ = client.Close() }()
 
+	// Serialize all on-host Salt operations against this host so concurrent
+	// resources don't race on bootstrap or salt-call's per-minion lock.
+	mu := salt.HostLockFor(client.Host)
+	mu.Lock()
+	defer mu.Unlock()
+
 	workDir := salt.WorkDir(data.ID.ValueString())
 	states := extractStringMap(ctx, data.States)
 	pillar := extractStringMap(ctx, data.Pillar)
@@ -303,6 +309,12 @@ func (r *SaltStateResource) Delete(ctx context.Context, req resource.DeleteReque
 	}
 	defer func() { _ = client.Close() }()
 
+	// Serialize all on-host Salt operations against this host so concurrent
+	// resources don't race on bootstrap or salt-call's per-minion lock.
+	mu := salt.HostLockFor(client.Host)
+	mu.Lock()
+	defer mu.Unlock()
+
 	// Apply destroy states if configured
 	if len(destroyStates) > 0 {
 		diags := r.applyDestroyStates(ctx, client, &data, destroyStates)
@@ -361,6 +373,12 @@ func (r *SaltStateResource) applySalt(ctx context.Context, data *SaltStateModel,
 		return nil, diags
 	}
 	defer func() { _ = client.Close() }()
+
+	// Serialize all on-host Salt operations against this host so concurrent
+	// resources don't race on bootstrap or salt-call's per-minion lock.
+	mu := salt.HostLockFor(client.Host)
+	mu.Lock()
+	defer mu.Unlock()
 
 	// Determine Salt version
 	saltVersion := r.defaultSaltVersion
