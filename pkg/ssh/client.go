@@ -32,6 +32,9 @@ type ConnectConfig struct {
 
 // Client wraps an SSH connection to a remote host.
 type Client struct {
+	// Host is the target hostname/IP this client is connected to. Exposed so
+	// downstream code (e.g. bootstrap serialization) can key per-host state.
+	Host   string
 	client *ssh.Client
 }
 
@@ -95,7 +98,7 @@ func NewClientWithRetry(cfg ConnectConfig) (*Client, error) {
 
 		client, err := ssh.Dial("tcp", addr, sshConfig)
 		if err == nil {
-			return &Client{client: client}, nil
+			return &Client{Host: cfg.Host, client: client}, nil
 		}
 		lastErr = err
 	}

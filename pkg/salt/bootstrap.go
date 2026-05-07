@@ -3,6 +3,7 @@ package salt
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/bartei/terraform-provider-salt/pkg/ssh"
 )
@@ -10,6 +11,19 @@ import (
 // saltCallPath is the extended PATH used to find salt-call across common
 // install locations (onedir, pip, system package).
 const saltPath = "/opt/saltstack/salt/bin:/usr/local/bin:/usr/bin:/bin"
+
+// bootstrapLocks holds one *sync.Mutex per remote host. EnsureVersion takes
+// the lock for client.Host before checking + bootstrapping, so concurrent
+// salt_state resources targeting the same host (Terraform default
+// -parallelism=10) don't race on bootstrap-salt.sh — they'd otherwise stomp
+// on the script's /tmp FIFO and the dnf/rpm package lock, producing
+// "Failed to create the named pipe" + curl(23) failures.
+var bootstrapLocks sync.Map
+
+func bootstrapLockFor(host string) *sync.Mutex {
+	m, _ := bootstrapLocks.LoadOrStore(host, &sync.Mutex{})
+	return m.(*sync.Mutex)
+}
 
 // SaltCallCmd returns a sudo invocation of salt-call with the correct PATH
 // so it works regardless of where Salt was installed.
@@ -46,6 +60,12 @@ func FindSaltCall(client *ssh.Client) string {
 // its post-install service check can fail when salt-minion is masked).
 // Failing loudly gives the operator a clear signal and avoids silent drift.
 func EnsureVersion(client *ssh.Client, version string) error {
+	// Serialize per host: the first concurrent caller bootstraps; the
+	// rest then see Salt installed and return without re-bootstrapping.
+	mu := bootstrapLockFor(client.Host)
+	mu.Lock()
+	defer mu.Unlock()
+
 	installed := FindSaltCall(client)
 
 	if version == "latest" {
