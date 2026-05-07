@@ -108,12 +108,16 @@ else
     fail "salt-minion should be inactive/failed, got: $(echo "${MINION_STATE}" | tail -1)"
 fi
 
-# If the bootstrap path took longer than ~60s we very likely re-introduced
-# the DNS-retry hang. A clean cold install completes in well under 30s.
-if (( APPLY_DURATION > 60 )); then
+# If the bootstrap path took longer than ~120s we very likely re-introduced
+# the DNS-retry hang, which adds ≥30s per retry attempt and typically pushes
+# total time well past 150s. Threshold sized to catch that regression while
+# absorbing real-world variance: GHA runner noise, saltproject.io latency,
+# and growth of the Salt onedir tarball over time. A clean cold install
+# historically completed in ~30s but now sits closer to 60-80s on Debian.
+if (( APPLY_DURATION > 120 )); then
     fail "Cold apply took ${APPLY_DURATION}s — suspect salt-minion DNS-retry hang regression"
 else
-    pass "Cold apply finished within 60s (${APPLY_DURATION}s)"
+    pass "Cold apply finished within 120s (${APPLY_DURATION}s)"
 fi
 
 # Count salt-minion "Retrying in 30 seconds" lines. The package postinst
