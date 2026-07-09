@@ -285,7 +285,7 @@ terraform {
 }
 
 provider "salt" {
-  salt_version = "latest"
+  salt_version = "3007" # pinned pre-Argon: salt 3008+ masks pillar.items values as ********
 }
 
 variable "ssh_private_key_file" {
@@ -533,7 +533,7 @@ terraform {
 }
 
 provider "salt" {
-  salt_version = "latest"
+  salt_version = "3007" # pinned pre-Argon: salt 3008+ masks pillar.items values as ********
 }
 
 variable "ssh_private_key_file" { type = string }
@@ -599,7 +599,7 @@ terraform {
 }
 
 provider "salt" {
-  salt_version = "latest"
+  salt_version = "3007" # pinned pre-Argon: salt 3008+ masks pillar.items values as ********
 }
 
 variable "ssh_private_key_file" { type = string }
