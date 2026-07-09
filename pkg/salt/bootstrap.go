@@ -89,21 +89,39 @@ func EnsureVersion(client *ssh.Client, version string) error {
 		strings.TrimSpace(installed), version)
 }
 
+// bootstrapScriptURL is the salt-bootstrap installer we fetch and run.
+const bootstrapScriptURL = "https://github.com/saltstack/salt-bootstrap/releases/latest/download/bootstrap-salt.sh"
+
+// bootstrapScriptPath is where we stage the installer on the remote host.
+const bootstrapScriptPath = "/tmp/bootstrap-salt.sh"
+
 func bootstrap(client *ssh.Client, version string) error {
 	versionArg := ""
 	if version != "" {
 		versionArg = " stable " + version
 	}
 
+	// Fetch the installer to a file, then run it — do NOT `curl ... | sh`.
+	// On minimal images (e.g. the Ubuntu LXC template) curl is absent, and a
+	// piped `curl | sh` silently no-ops there: the missing curl produces an
+	// empty stdin, sh exits 0, and Salt is never installed — surfacing much
+	// later as an opaque "salt-call: not found" (exit 127). Staging to a file
+	// under `set -e` makes a failed download a hard, obvious error instead.
+	//
+	// Downloader selection is deliberately tolerant: prefer curl, fall back to
+	// wget (present on many minimal images even when curl isn't), and only if
+	// neither exists install curl via the distro package manager. The
+	// salt-bootstrap script itself also needs curl/wget/fetch to pull the Salt
+	// packages, so guaranteeing one exists fixes both stages.
+	if _, err := client.Run(fetchScriptCmd(bootstrapScriptURL, bootstrapScriptPath)); err != nil {
+		return fmt.Errorf("fetching salt-bootstrap script: %w", err)
+	}
+
 	// -X tells the bootstrap script not to start daemons after installation.
 	// We run masterless (salt-call --local), so the salt-minion service is
 	// never wanted — leaving it running just wastes time hanging on DNS
 	// lookups for the default master hostname 'salt'.
-	bootstrapCmd := fmt.Sprintf(
-		`curl -fsSL https://github.com/saltstack/salt-bootstrap/releases/latest/download/bootstrap-salt.sh | sudo sh -s -- -X -P -x python3%s`,
-		versionArg,
-	)
-
+	bootstrapCmd := fmt.Sprintf(`sudo sh %s -X -P -x python3%s`, bootstrapScriptPath, versionArg)
 	if _, err := client.Run(bootstrapCmd); err != nil {
 		return fmt.Errorf("bootstrap failed: %w", err)
 	}
@@ -115,7 +133,38 @@ func bootstrap(client *ssh.Client, version string) error {
 	// and tolerate an absent unit.
 	disableMinion(client)
 
+	// Verify the install actually produced a usable salt-call. salt-bootstrap
+	// can exit 0 while leaving nothing runnable (a missing/mismatched build,
+	// an interrupted download), so confirm here and fail loudly rather than
+	// letting the next salt-call surface an opaque code 127.
+	if FindSaltCall(client) == "" {
+		return fmt.Errorf("salt-bootstrap completed but salt-call is still not available on %s "+
+			"(check the host has internet egress and a working package manager)", client.Host)
+	}
+
 	return nil
+}
+
+// fetchScriptCmd builds a POSIX-sh command that downloads url to path using
+// whatever downloader the host has (curl or wget), installing curl via the
+// distro package manager as a last resort. `set -e` ensures any failing step
+// aborts with a non-zero exit so the caller sees a real error.
+func fetchScriptCmd(url, path string) string {
+	return fmt.Sprintf(`set -e
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL -o %[1]s %[2]s
+elif command -v wget >/dev/null 2>&1; then
+  wget -qO %[1]s %[2]s
+else
+  if command -v apt-get >/dev/null 2>&1; then sudo apt-get update -qq && sudo apt-get install -y curl
+  elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y curl
+  elif command -v yum >/dev/null 2>&1; then sudo yum install -y curl
+  elif command -v zypper >/dev/null 2>&1; then sudo zypper --non-interactive install curl
+  elif command -v apk >/dev/null 2>&1; then sudo apk add --no-cache curl
+  else echo "no curl/wget and no supported package manager to install one" >&2; exit 1
+  fi
+  curl -fsSL -o %[1]s %[2]s
+fi`, path, url)
 }
 
 // disableMinion stops, disables, and masks the salt-minion service on the
