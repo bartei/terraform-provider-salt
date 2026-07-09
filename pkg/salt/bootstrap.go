@@ -37,14 +37,18 @@ func FindSaltCall(client *ssh.Client) string {
 //
 // Special values:
 //   - "latest": ensures Salt is installed (any version), bootstraps if missing.
-//   - A version number like "3007": ensures that specific version is present.
+//   - A version like "3008" or "3008.2": ensures that feature release is
+//     present. Matching is by feature release (see matchesFeatureRelease), so a
+//     patch update within the release (e.g. 3008.2 -> 3008.7, which an OS
+//     package upgrade applies from the same Salt repo) does NOT break apply.
 //
-// When a specific version is requested but a different version is already
-// installed, we fail loudly rather than try to re-bootstrap. salt-bootstrap's
-// re-install path is unreliable across distros (e.g. on Fedora it ignores
-// the version argument when /etc/yum.repos.d/salt.repo already exists, and
-// its post-install service check can fail when salt-minion is masked).
-// Failing loudly gives the operator a clear signal and avoids silent drift.
+// When a *different feature release* is already installed we fail loudly rather
+// than re-bootstrap: salt-bootstrap's re-install path is unreliable across
+// distros (e.g. on Fedora it ignores the version argument when
+// /etc/yum.repos.d/salt.repo already exists, and its post-install service check
+// can fail when salt-minion is masked), and a feature-release change can alter
+// behavior (Argon, for one, masks pillar output by default). Failing loudly
+// there gives the operator a clear signal and avoids silent drift.
 // Concurrency: callers must hold HostLockFor(client.Host) when invoking
 // EnsureVersion so that bootstrap and the salt-call ops that follow all
 // run serialized per host. EnsureVersion itself is *not* internally locked
@@ -64,11 +68,12 @@ func EnsureVersion(client *ssh.Client, version string) error {
 		if err := bootstrap(client, version); err != nil {
 			return err
 		}
-		// Verify the install actually produced the requested version.
-		// salt-bootstrap on some distros (notably Fedora) silently installs
-		// a different version when the requested one isn't in its repo.
+		// Verify the install produced the requested feature release.
+		// salt-bootstrap on some distros (notably Fedora) silently installs a
+		// different version when the requested one isn't in its repo. Matching
+		// on feature release means a patch difference within the release is fine.
 		got := FindSaltCall(client)
-		if !strings.Contains(got, version) {
+		if !matchesFeatureRelease(got, version) {
 			return fmt.Errorf(
 				"bootstrap installed Salt version %q but %q was requested — "+
 					"salt-bootstrap does not appear to have a build of %q for this distro. "+
@@ -78,15 +83,50 @@ func EnsureVersion(client *ssh.Client, version string) error {
 		return nil
 	}
 
-	if strings.Contains(installed, version) {
+	// Match on feature release so routine OS package updates that bump the patch
+	// within a release (e.g. 3008.2 -> 3008.7, from the same Salt repo) don't
+	// break apply. A feature-release change (e.g. 3008 -> 3009) can alter
+	// behavior, so we still fail loudly there rather than silently adopt it.
+	if matchesFeatureRelease(installed, version) {
 		return nil
 	}
 
 	return fmt.Errorf(
-		"installed Salt version %q does not match requested %q on the target host. "+
-			"This provider does not perform in-place upgrades — uninstall Salt manually "+
-			"and re-apply, or change salt_version to match what is installed",
+		"installed Salt %q is a different feature release than requested %q on the target host. "+
+			"A patch update within the release is tolerated, but this is a feature-release change "+
+			"that can alter behavior; this provider does not perform cross-release upgrades — "+
+			"uninstall Salt and re-apply, or set salt_version to the installed release",
 		strings.TrimSpace(installed), version)
+}
+
+// matchesFeatureRelease reports whether an installed Salt version string and the
+// requested salt_version share a feature release. "latest" always matches.
+func matchesFeatureRelease(installed, requested string) bool {
+	if requested == "latest" {
+		return true
+	}
+	ir := saltFeatureRelease(installed)
+	return ir != "" && ir == saltFeatureRelease(requested)
+}
+
+// saltFeatureRelease extracts Salt's feature-release number — the first run of
+// digits — from a version string ("3008" from "3008.2", "3008", or
+// "salt-call 3008.2 (Argon)"). Returns "" when there are no digits.
+func saltFeatureRelease(s string) string {
+	start := -1
+	for i := 0; i < len(s); i++ {
+		if s[i] >= '0' && s[i] <= '9' {
+			if start == -1 {
+				start = i
+			}
+		} else if start != -1 {
+			return s[start:i]
+		}
+	}
+	if start != -1 {
+		return s[start:]
+	}
+	return ""
 }
 
 // bootstrapScriptURL is the salt-bootstrap installer we fetch and run.

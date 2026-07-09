@@ -45,3 +45,45 @@ func TestFetchScriptCmd(t *testing.T) {
 		t.Errorf("fetch command missing path %q:\n%s", path, cmd)
 	}
 }
+
+func TestSaltFeatureRelease(t *testing.T) {
+	cases := map[string]string{
+		"3008.2":                    "3008",
+		"3008":                      "3008",
+		"3007.14":                   "3007",
+		"salt-call 3008.2 (Argon)":  "3008",
+		"salt-call 3007.14 (Chlor)": "3007",
+		"latest":                    "",
+		"":                          "",
+	}
+	for in, want := range cases {
+		if got := saltFeatureRelease(in); got != want {
+			t.Errorf("saltFeatureRelease(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestMatchesFeatureRelease is the core robustness guard: an OS package update
+// that bumps the patch within a feature release must NOT be treated as a
+// mismatch, while a feature-release change still must be.
+func TestMatchesFeatureRelease(t *testing.T) {
+	cases := []struct {
+		installed, requested string
+		want                 bool
+		why                  string
+	}{
+		{"salt-call 3008.7 (Argon)", "3008.2", true, "patch update within release — must tolerate (the OS-update case)"},
+		{"salt-call 3008.2 (Argon)", "3008.2", true, "exact match"},
+		{"salt-call 3008.2 (Argon)", "3008", true, "release-only pin matches any patch"},
+		{"salt-call 3009.0 (Bismuth)", "3008.2", false, "feature-release jump must be flagged"},
+		{"salt-call 3007.14 (Chlorine)", "3008", false, "different release"},
+		{"salt-call 3008.2 (Argon)", "latest", true, `"latest" always matches`},
+		{"", "3008.2", false, "not installed"},
+	}
+	for _, c := range cases {
+		if got := matchesFeatureRelease(c.installed, c.requested); got != c.want {
+			t.Errorf("matchesFeatureRelease(%q, %q) = %v, want %v (%s)",
+				c.installed, c.requested, got, c.want, c.why)
+		}
+	}
+}
