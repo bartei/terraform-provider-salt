@@ -476,8 +476,11 @@ TFEOF
 
 terraform apply -auto-approve -var="ssh_private_key_file=${SSH_KEY}"
 
-PILLAR_TEST_KEY=$(terraform output -raw test_key)
-PILLAR_ENV=$(terraform output -raw environment)
+# Read via -json|jq: `terraform output -raw` can render these pillar values
+# masked (********) depending on the Terraform version; -json returns the real
+# value regardless of how the human-readable output masks it.
+PILLAR_TEST_KEY=$(terraform output -json test_key | jq -r .)
+PILLAR_ENV=$(terraform output -json environment | jq -r .)
 
 if [[ "${PILLAR_TEST_KEY}" == "test_value" ]]; then
     pass "Pillar: test_key = ${PILLAR_TEST_KEY}"

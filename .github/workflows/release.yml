@@ -50,6 +50,10 @@ jobs:
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
+          # Pin Terraform for reproducible e2e. Unpinned, setup-terraform tracks
+          # latest, and a newer Terraform changed how the salt_pillar output
+          # renders (masked as ********), breaking the pillar assertion.
+          terraform_version: "1.9.8"
           terraform_wrapper: false
 
       - name: Install QEMU + xorriso
